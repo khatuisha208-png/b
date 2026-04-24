@@ -1,6 +1,11 @@
-
+openai
+whisper
+json
+csv
 ffmpeg-python
 langdetect
 torch
 numpy
+io
+os
 
