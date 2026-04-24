@@ -5,6 +5,8 @@ import csv
 import io
 import os
 import tempfile
+import openpyxl
+from openpyxl import load_workbook
 from groq import Groq
 
 # ── Page config ────────────────────────────────────────────────────────────────
@@ -19,7 +21,7 @@ st.title("🏡 StayVista Property Acquisition Tool")
 st.caption("Upload a property walkthrough video → get a structured summary + CSV instantly")
 st.divider()
 
-# ── Sidebar: API key ───────────────────────────────────────────────────────────
+# ── Sidebar ────────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.header("⚙️ Configuration")
     groq_api_key = st.text_input(
@@ -35,7 +37,7 @@ with st.sidebar:
     st.markdown("**Supported languages**")
     st.markdown("Hindi, English, Hinglish — auto-detected")
 
-# ── Whisper loader (cached so it loads only once) ──────────────────────────────
+# ── Whisper loader ─────────────────────────────────────────────────────────────
 @st.cache_resource
 def load_whisper():
     return whisper.load_model("base")
@@ -95,6 +97,45 @@ return a JSON object with EXACTLY these two keys:
 
 Return ONLY valid JSON. No markdown. Never invent details."""
 
+# ── Excel helper ───────────────────────────────────────────────────────────────
+EXCEL_FILE = "stayvista_acquisitions.xlsx"
+
+def save_to_excel(csv_data):
+    if os.path.exists(EXCEL_FILE):
+        wb = load_workbook(EXCEL_FILE)
+        ws = wb.active
+        existing_headers = [cell.value for cell in ws[1]]
+        # Add any new columns not previously seen
+        for key in csv_data.keys():
+            display = key.replace("_", " ").title()
+            if display not in existing_headers:
+                ws.cell(row=1, column=len(existing_headers) + 1, value=display)
+                existing_headers.append(display)
+    else:
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Property Acquisitions"
+        existing_headers = [k.replace("_", " ").title() for k in csv_data.keys()]
+        for col_num, header in enumerate(existing_headers, 1):
+            cell = ws.cell(row=1, column=col_num, value=header)
+            cell.font = openpyxl.styles.Font(bold=True, color="FFFFFF")
+            cell.fill = openpyxl.styles.PatternFill("solid", fgColor="6C3FC5")
+            cell.alignment = openpyxl.styles.Alignment(horizontal="center", wrap_text=True)
+
+    # Map headers back to keys and append row
+    header_to_key = {k.replace("_", " ").title(): k for k in csv_data.keys()}
+    new_row = [csv_data.get(header_to_key.get(h)) for h in existing_headers]
+    ws.append(new_row)
+
+    # Auto-fit column widths
+    for col in ws.columns:
+        max_len = max((len(str(cell.value)) if cell.value else 0) for cell in col)
+        ws.column_dimensions[col[0].column_letter].width = min(max_len + 4, 40)
+
+    ws.freeze_panes = "A2"
+    wb.save(EXCEL_FILE)
+    return ws.max_row - 1  # total properties saved
+
 # ── Main app ───────────────────────────────────────────────────────────────────
 if not groq_api_key:
     st.info("👈 Enter your Groq API key in the sidebar to get started.")
@@ -106,12 +147,13 @@ uploaded_file = st.file_uploader(
 )
 
 if uploaded_file:
-    st.video(uploaded_file) if uploaded_file.name.endswith(
-        ("mp4", "mov", "mkv", "avi")) else st.audio(uploaded_file)
+    if uploaded_file.name.endswith(("mp4", "mov", "mkv", "avi")):
+        st.video(uploaded_file)
+    else:
+        st.audio(uploaded_file)
 
     if st.button("🚀 Process Property", type="primary", use_container_width=True):
 
-        # Save uploaded file to temp path
         suffix = os.path.splitext(uploaded_file.name)[-1]
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             tmp.write(uploaded_file.read())
@@ -126,8 +168,10 @@ if uploaded_file:
                 result = model.transcribe(tmp_path, task="translate", language=None)
                 transcription = result["text"]
                 detected_lang = result.get("language", "unknown")
-                status.update(label=f"✅ Transcription done  (detected: {detected_lang})",
-                              state="complete")
+                status.update(
+                    label=f"✅ Transcription done  (detected: {detected_lang})",
+                    state="complete"
+                )
 
             with st.expander("📄 View raw transcription"):
                 st.write(transcription)
@@ -162,7 +206,6 @@ if uploaded_file:
 
             with col1:
                 st.subheader("📋 Property Summary")
-                # Render each section as a neat block
                 for line in summary.strip().split("\n"):
                     if line.strip().isupper() and len(line.strip()) > 2:
                         st.markdown(f"**{line.strip()}**")
@@ -174,13 +217,12 @@ if uploaded_file:
                 found = {k: v for k, v in csv_data.items() if v is not None}
                 st.caption(f"{len(found)} of {len(csv_data)} fields captured")
 
-                # Group display
                 groups = {
-                    "📍 Location": ["property_name","location","city","state",
-                                    "is_gated_community","community_name","nearby_landmarks"],
-                    "🏠 Property": ["property_type","total_rooms","bedrooms","bathrooms",
-                                    "total_floors","area_sqft","plot_area_sqft",
-                                    "furnishing_status","age_of_property_years","condition_of_property"],
+                    "📍 Location":  ["property_name","location","city","state",
+                                     "is_gated_community","community_name","nearby_landmarks"],
+                    "🏠 Property":  ["property_type","total_rooms","bedrooms","bathrooms",
+                                     "total_floors","area_sqft","plot_area_sqft",
+                                     "furnishing_status","age_of_property_years","condition_of_property"],
                     "✅ Approvals": ["is_rera_approved","rera_number","other_approvals"],
                     "🏊 Amenities": ["has_swimming_pool","number_of_swimming_pools","pool_type",
                                      "has_jacuzzi","number_of_jacuzzis","has_private_pool",
@@ -193,10 +235,11 @@ if uploaded_file:
                     "🔒 Services":  ["has_parking","parking_capacity","has_caretaker",
                                      "has_security_staff","has_cctv","has_wifi","has_ac",
                                      "has_generator_backup","has_ev_charging"],
-                    "💰 Pricing":  ["monthly_rent_inr","nightly_rate_inr",
-                                    "security_deposit_inr","minimum_stay_nights"],
-                    "📝 Notes":    ["special_features","acquisition_poc_notes"],
+                    "💰 Pricing":   ["monthly_rent_inr","nightly_rate_inr",
+                                     "security_deposit_inr","minimum_stay_nights"],
+                    "📝 Notes":     ["special_features","acquisition_poc_notes"],
                 }
+
                 for group_name, keys in groups.items():
                     group_data = {k: csv_data[k] for k in keys
                                   if k in csv_data and csv_data[k] is not None}
@@ -206,32 +249,35 @@ if uploaded_file:
                                 label = k.replace("_", " ").title()
                                 st.markdown(f"**{label}:** {v}")
 
-            # ── Step 4: Downloads ──────────────────────────────────────────────
+            # ── Step 4: Save to Excel + Downloads ─────────────────────────────
             st.divider()
             st.subheader("⬇️ Download Outputs")
+
+            total_saved = save_to_excel(csv_data)
+            st.success(f"✅ Property saved! Total properties in Excel: **{total_saved}**")
+
             dl1, dl2 = st.columns(2)
+
+            prop_name = (csv_data.get("property_name") or "property").replace(" ", "_")
 
             with dl1:
                 st.download_button(
                     label="📄 Download Summary (.txt)",
                     data=summary,
-                    file_name=f"{csv_data.get('property_name','property').replace(' ','_')}_summary.txt",
+                    file_name=f"{prop_name}_summary.txt",
                     mime="text/plain",
                     use_container_width=True
                 )
 
             with dl2:
-                csv_buffer = io.StringIO()
-                writer = csv.DictWriter(csv_buffer, fieldnames=csv_data.keys())
-                writer.writeheader()
-                writer.writerow(csv_data)
-                st.download_button(
-                    label="📊 Download Data (.csv)",
-                    data=csv_buffer.getvalue(),
-                    file_name=f"{csv_data.get('property_name','property').replace(' ','_')}_data.csv",
-                    mime="text/csv",
-                    use_container_width=True
-                )
+                with open(EXCEL_FILE, "rb") as f:
+                    st.download_button(
+                        label=f"📊 Download Excel ({total_saved} properties)",
+                        data=f,
+                        file_name=EXCEL_FILE,
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True
+                    )
 
         finally:
-            os.unlink(tmp_path)  # clean up temp file
+            os.unlink(tmp_path)
