@@ -1,269 +1,340 @@
 import streamlit as st
-import anthropic
-import base64
+import openai
 import csv
 import json
-import os
-import tempfile
 import io
-from pathlib import Path
+import os
 from datetime import datetime
 
-# ── Page config ──────────────────────────────────────────────────────────────
+# ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="StayVista Villa Acquisition Analyzer",
+    page_title="StayVista · Villa Acquisition Intelligence",
     page_icon="🏛️",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# ── Custom CSS ────────────────────────────────────────────────────────────────
+# ── CSS ───────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;600;700&family=DM+Sans:wght@300;400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@300;400;500;700&family=Jost:wght@300;400;500&display=swap');
 
 :root {
-    --gold: #C9A84C;
-    --deep: #0D0D0D;
-    --surface: #141414;
-    --card: #1A1A1A;
-    --border: #2A2A2A;
-    --text: #E8E8E8;
-    --muted: #888;
+    --ink:     #0B0B0B;
+    --surface: #111111;
+    --card:    #181818;
+    --border:  #262626;
+    --gold:    #C8A45A;
+    --gold2:   #E6C97A;
+    --text:    #EBEBEB;
+    --muted:   #777;
+    --green:   #52C97B;
+    --red:     #E05A5A;
 }
 
 html, body, [class*="css"] {
-    font-family: 'DM Sans', sans-serif;
-    background: var(--deep);
+    font-family: 'Jost', sans-serif;
+    background: var(--ink);
     color: var(--text);
 }
+.stApp { background: var(--ink); }
 
-.stApp { background: var(--deep); }
-
-/* Header */
-.villa-header {
+.app-header {
+    padding: 2.8rem 0 1.6rem;
     text-align: center;
-    padding: 2.5rem 1rem 1.5rem;
     border-bottom: 1px solid var(--border);
-    margin-bottom: 2rem;
+    margin-bottom: 2.4rem;
+    position: relative;
 }
-.villa-header h1 {
-    font-family: 'Cormorant Garamond', serif;
-    font-size: 3rem;
-    font-weight: 300;
-    color: var(--gold);
-    letter-spacing: 0.05em;
-    margin: 0;
+.app-header::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 50%;
+    transform: translateX(-50%);
+    width: 60px; height: 2px;
+    background: linear-gradient(90deg, transparent, var(--gold), transparent);
 }
-.villa-header p {
-    color: var(--muted);
-    font-size: 0.9rem;
-    letter-spacing: 0.12em;
+.app-header .eyebrow {
+    font-size: 0.68rem;
+    letter-spacing: 0.28em;
     text-transform: uppercase;
-    margin-top: 0.5rem;
+    color: var(--gold);
+    margin-bottom: 0.6rem;
+}
+.app-header h1 {
+    font-family: 'Playfair Display', serif;
+    font-size: 2.8rem;
+    font-weight: 300;
+    color: var(--text);
+    margin: 0;
+    line-height: 1.1;
+}
+.app-header h1 span { color: var(--gold); }
+.app-header .sub {
+    color: var(--muted);
+    font-size: 0.82rem;
+    letter-spacing: 0.1em;
+    margin-top: 0.6rem;
 }
 
-/* Cards */
-.result-card {
+[data-testid="stSidebar"] {
+    background: var(--surface) !important;
+    border-right: 1px solid var(--border) !important;
+}
+.sidebar-brand {
+    font-family: 'Playfair Display', serif;
+    font-size: 1.3rem;
+    color: var(--gold) !important;
+    text-align: center;
+    padding: 1.4rem 0 1rem;
+    border-bottom: 1px solid var(--border);
+    letter-spacing: 0.06em;
+    margin-bottom: 1.4rem;
+}
+.sidebar-section {
+    font-size: 0.68rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--gold);
+    margin: 1.2rem 0 0.5rem;
+}
+.sidebar-item {
+    font-size: 0.82rem;
+    color: var(--muted) !important;
+    padding: 0.18rem 0;
+}
+
+.card {
     background: var(--card);
     border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 1.5rem;
+    border-radius: 3px;
+    padding: 1.4rem 1.6rem;
     margin-bottom: 1rem;
 }
-.result-card h3 {
-    font-family: 'Cormorant Garamond', serif;
-    font-size: 1.4rem;
+.card-title {
+    font-family: 'Playfair Display', serif;
+    font-size: 1.3rem;
     color: var(--gold);
-    margin-bottom: 0.75rem;
     font-weight: 400;
+    margin-bottom: 0.8rem;
 }
 
-/* Pill badges */
-.pill {
-    display: inline-block;
-    background: rgba(201,168,76,0.15);
-    border: 1px solid rgba(201,168,76,0.4);
-    color: var(--gold);
-    border-radius: 2px;
-    padding: 0.2rem 0.6rem;
-    font-size: 0.75rem;
-    margin: 0.2rem;
-    letter-spacing: 0.05em;
-}
-.pill-no {
-    background: rgba(255,80,80,0.1);
-    border-color: rgba(255,80,80,0.3);
-    color: #ff6b6b;
-}
-
-/* Metric row */
-.metric-row {
+.metric-strip {
     display: flex;
-    gap: 1rem;
-    margin-bottom: 1.5rem;
+    gap: 0.8rem;
+    margin-bottom: 2rem;
     flex-wrap: wrap;
 }
-.metric-box {
+.metric-tile {
     background: var(--card);
     border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 1rem 1.5rem;
-    text-align: center;
+    border-radius: 3px;
+    padding: 1rem 1.4rem;
     flex: 1;
-    min-width: 100px;
+    min-width: 90px;
+    text-align: center;
 }
-.metric-box .val {
-    font-family: 'Cormorant Garamond', serif;
-    font-size: 2rem;
-    color: var(--gold);
+.metric-val {
+    font-family: 'Playfair Display', serif;
+    font-size: 2.2rem;
     font-weight: 300;
+    line-height: 1;
 }
-.metric-box .lbl {
-    font-size: 0.7rem;
+.metric-lbl {
+    font-size: 0.65rem;
+    letter-spacing: 0.16em;
     text-transform: uppercase;
-    letter-spacing: 0.1em;
     color: var(--muted);
-    margin-top: 0.25rem;
+    margin-top: 0.3rem;
+}
+.gold  { color: var(--gold); }
+.green { color: var(--green); }
+.red   { color: var(--red); }
+
+.pills { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0.6rem 0; }
+.pill {
+    background: rgba(200,164,90,0.12);
+    border: 1px solid rgba(200,164,90,0.35);
+    color: var(--gold2);
+    border-radius: 2px;
+    padding: 0.18rem 0.55rem;
+    font-size: 0.73rem;
+    letter-spacing: 0.04em;
+}
+.pill-miss {
+    background: rgba(224,90,90,0.08);
+    border-color: rgba(224,90,90,0.25);
+    color: #E07070;
 }
 
-/* Score badge */
-.score-high { color: #4ade80; }
-.score-mid  { color: var(--gold); }
-.score-low  { color: #f87171; }
-
-/* Upload zone */
-[data-testid="stFileUploader"] {
-    border: 1px dashed var(--border) !important;
-    border-radius: 4px !important;
-    background: var(--card) !important;
-    padding: 1rem !important;
+.score-wrap {
+    text-align: center;
+    padding: 1rem 0;
+}
+.score-num {
+    font-family: 'Playfair Display', serif;
+    font-size: 4rem;
+    font-weight: 300;
+    line-height: 1;
+}
+.score-denom { font-size: 1rem; color: var(--muted); }
+.score-label {
+    font-size: 0.68rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-top: 0.3rem;
+}
+.score-rationale {
+    font-size: 0.8rem;
+    color: var(--muted);
+    margin-top: 0.7rem;
+    line-height: 1.6;
+    font-style: italic;
 }
 
-/* Buttons */
+.spec-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 0.35rem 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 0.83rem;
+}
+.spec-row:last-child { border-bottom: none; }
+.spec-key { color: var(--muted); }
+.spec-val { color: var(--text); font-weight: 500; }
+
+.transcript-box {
+    background: #0D0D0D;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 1rem 1.2rem;
+    font-size: 0.8rem;
+    color: #999;
+    max-height: 220px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    font-family: 'Courier New', monospace;
+    line-height: 1.65;
+}
+
 .stButton > button {
     background: var(--gold) !important;
     color: #000 !important;
     border: none !important;
     border-radius: 2px !important;
-    font-family: 'DM Sans', sans-serif !important;
-    font-size: 0.85rem !important;
-    letter-spacing: 0.08em !important;
-    padding: 0.6rem 1.8rem !important;
-    font-weight: 500 !important;
+    font-family: 'Jost', sans-serif !important;
+    font-size: 0.78rem !important;
+    letter-spacing: 0.14em !important;
     text-transform: uppercase !important;
+    padding: 0.6rem 2rem !important;
+    font-weight: 500 !important;
 }
-.stButton > button:hover {
-    background: #e0b85a !important;
+.stButton > button:hover { background: var(--gold2) !important; }
+
+[data-testid="stFileUploader"] {
+    border: 1px dashed var(--border) !important;
+    background: var(--card) !important;
+    border-radius: 3px !important;
 }
 
-/* Progress */
 .stProgress > div > div { background: var(--gold) !important; }
 
-/* Sidebar */
-[data-testid="stSidebar"] {
-    background: var(--surface) !important;
-    border-right: 1px solid var(--border) !important;
-}
-[data-testid="stSidebar"] * { color: var(--text) !important; }
-
-.sidebar-logo {
-    font-family: 'Cormorant Garamond', serif;
-    font-size: 1.6rem;
+[data-testid="stDownloadButton"] > button {
+    background: transparent !important;
     color: var(--gold) !important;
-    text-align: center;
-    padding: 1.2rem 0;
-    border-bottom: 1px solid var(--border);
-    margin-bottom: 1.5rem;
-    letter-spacing: 0.08em;
+    border: 1px solid var(--gold) !important;
+    border-radius: 2px !important;
+    font-family: 'Jost', sans-serif !important;
+    font-size: 0.78rem !important;
+    letter-spacing: 0.14em !important;
+    text-transform: uppercase !important;
+}
+[data-testid="stDownloadButton"] > button:hover {
+    background: rgba(200,164,90,0.1) !important;
 }
 
-/* Expander */
 [data-testid="stExpander"] {
     background: var(--card) !important;
     border: 1px solid var(--border) !important;
-    border-radius: 4px !important;
+    border-radius: 3px !important;
 }
 
-/* Divider */
+.status { font-size: 0.8rem; letter-spacing: 0.1em; text-transform: uppercase; }
+.status-active { color: var(--gold); }
+.status-done   { color: var(--green); }
+
 hr { border-color: var(--border) !important; }
 
-/* Transcript box */
-.transcript-box {
-    background: #111;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 1rem;
-    font-size: 0.85rem;
-    color: #aaa;
-    max-height: 200px;
-    overflow-y: auto;
-    white-space: pre-wrap;
-    font-family: monospace;
+.empty-state {
+    text-align: center;
+    padding: 5rem 2rem;
+    color: var(--muted);
 }
-
-/* Status */
-.status-analyzing {
-    color: var(--gold);
-    font-size: 0.85rem;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-}
+.empty-state .icon { font-size: 3.5rem; margin-bottom: 1rem; opacity: 0.4; }
+.empty-state p { font-family: 'Playfair Display', serif; font-size: 1.3rem; color: #444; }
+.empty-state small { font-size: 0.82rem; color: #3A3A3A; line-height: 1.8; display: block; margin-top: 0.5rem; }
 </style>
 """, unsafe_allow_html=True)
 
 # ── Header ────────────────────────────────────────────────────────────────────
 st.markdown("""
-<div class="villa-header">
-    <h1>StayVista Villa Intelligence</h1>
-    <p>Acquisition Analysis · AI-Powered · Video to Insights</p>
+<div class="app-header">
+    <div class="eyebrow">StayVista · Acquisition Intelligence</div>
+    <h1>Villa <span>Analysis</span> Suite</h1>
+    <div class="sub">Whisper Transcription · GPT-4 Extraction · CSV Export</div>
 </div>
 """, unsafe_allow_html=True)
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown('<div class="sidebar-logo">⬡ StayVista</div>', unsafe_allow_html=True)
-    st.markdown("**How it works**")
-    st.markdown("""
-1. Upload one or more villa walkthrough videos  
-2. AI transcribes each video  
-3. Extracts location, amenities & acquisition data  
-4. Download a structured CSV report
-""")
-    st.markdown("---")
-    st.markdown("**Amenities Tracked**")
-    amenity_list = [
-        "Swimming Pool", "Jacuzzi / Hot Tub", "Lawn / Garden",
+    st.markdown('<div class="sidebar-brand">⬡ StayVista</div>', unsafe_allow_html=True)
+
+    api_key = st.text_input(
+        "OpenAI API Key",
+        type="password",
+        placeholder="sk-...",
+        help="Your key is used only for this session and never stored.",
+    )
+
+    st.markdown('<div class="sidebar-section">Workflow</div>', unsafe_allow_html=True)
+    for step in [
+        "① Upload audio files (MP3/WAV/M4A/OGG)",
+        "② Whisper transcribes the speech",
+        "③ GPT-4o extracts all villa data",
+        "④ Download structured CSV report",
+    ]:
+        st.markdown(f'<div class="sidebar-item">{step}</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="sidebar-section">Amenities Tracked</div>', unsafe_allow_html=True)
+    for a in [
+        "Swimming Pool", "Jacuzzi / Hot Tub", "Lawn & Garden",
         "Servant Quarters", "Parking", "Generator Backup",
         "CCTV / Security", "Home Theatre", "Gym / Fitness",
-        "Terrace / Rooftop", "Bar / Lounge", "Bonfire Area",
+        "Terrace / Rooftop", "Bar & Lounge", "Bonfire Area",
         "Pet Friendly", "Chef / Cook", "AC Rooms",
-    ]
-    for a in amenity_list:
-        st.markdown(f"· {a}")
+        "Modular Kitchen", "Outdoor Seating",
+        "Mountain / Sea / Forest View",
+    ]:
+        st.markdown(f'<div class="sidebar-item">· {a}</div>', unsafe_allow_html=True)
+
     st.markdown("---")
-    st.caption("Powered by Claude claude-sonnet-4-20250514 · Anthropic")
+    st.caption("OpenAI Whisper · GPT-4o · StayVista")
 
-# ── Anthropic client ──────────────────────────────────────────────────────────
-@st.cache_resource
-def get_client():
-    return anthropic.Anthropic()
+# ── System prompt ─────────────────────────────────────────────────────────────
+SYSTEM_PROMPT = """You are a senior real-estate acquisition analyst for StayVista, India's leading premium villa rental platform.
+Your task: analyze a villa walkthrough audio transcript and extract every relevant data point for acquisition evaluation.
 
-client = get_client()
-
-# ── Extraction prompt ─────────────────────────────────────────────────────────
-EXTRACTION_PROMPT = """You are an expert real-estate analyst for StayVista, a premium villa rental company.
-A villa walkthrough video has been transcribed. Analyze the transcript carefully and extract ALL relevant acquisition data.
-
-Return ONLY a valid JSON object (no markdown, no explanation) with this exact structure:
+Return ONLY a valid JSON object — no markdown fences, no explanation. Use this exact structure:
 {
-  "villa_name": "name if mentioned, else 'Unknown'",
+  "villa_name": "string or Unknown",
   "location": {
     "city": "",
     "state": "",
     "locality": "",
     "full_address": "",
-    "nearby_landmarks": ""
+    "nearby_landmarks": "",
+    "distance_from_city": ""
   },
   "property_details": {
     "bedrooms": null,
@@ -272,14 +343,15 @@ Return ONLY a valid JSON object (no markdown, no explanation) with this exact st
     "plot_area_sqft": null,
     "floors": null,
     "year_built": null,
-    "property_type": "Villa/Farmhouse/Bungalow/Other"
+    "property_type": "Villa/Farmhouse/Bungalow/Cottage/Other"
   },
   "amenities": {
     "swimming_pool": false,
     "pool_type": "",
+    "pool_heated": false,
     "jacuzzi": false,
     "lawn_garden": false,
-    "lawn_size": "",
+    "lawn_size_sqft": null,
     "servant_quarters": false,
     "servant_quarters_count": null,
     "parking": false,
@@ -303,16 +375,17 @@ Return ONLY a valid JSON object (no markdown, no explanation) with this exact st
     "other_amenities": []
   },
   "acquisition": {
-    "asking_price": null,
-    "asking_price_currency": "INR",
+    "asking_price_inr": null,
+    "price_per_sqft_inr": null,
     "price_negotiable": null,
     "ownership_type": "Freehold/Leasehold/Unknown",
     "caretaker_present": false,
     "currently_operational": false,
     "existing_bookings": false,
-    "revenue_mentioned": null,
+    "annual_revenue_inr": null,
     "legal_issues_mentioned": false,
     "renovation_needed": false,
+    "renovation_estimate_inr": null,
     "contact_person": "",
     "contact_number": ""
   },
@@ -320,424 +393,362 @@ Return ONLY a valid JSON object (no markdown, no explanation) with this exact st
   "stayvista_fit_rationale": "",
   "key_highlights": [],
   "concerns": [],
+  "acquisition_recommendation": "Strong Buy / Buy / Hold / Pass",
   "summary": ""
 }
 
-stayvista_fit_score: Rate 0-100 based on premium amenities, location desirability, property quality, and acquisition potential for StayVista.
-Fill every field you can infer from the transcript. Use null for truly unknown numeric fields and false for unknown boolean amenity fields.
+Scoring (stayvista_fit_score 0-100):
+80-100: Premium location + 5+ luxury amenities + strong revenue potential
+60-79: Good property, solid amenities, minor gaps
+40-59: Acceptable but needs investment or has location concerns
+0-39:  Poor fit for StayVista brand
 
-TRANSCRIPT:
-"""
+Fill every field you can infer. Use null for unknown numbers, false for unknown booleans."""
 
-# ── Helper: video → base64 ────────────────────────────────────────────────────
-def video_to_base64(file_bytes: bytes) -> str:
-    return base64.standard_b64encode(file_bytes).decode("utf-8")
 
-# ── Helper: transcribe via Claude vision ──────────────────────────────────────
-def transcribe_video(file_bytes: bytes, filename: str, mime_type: str) -> str:
-    """Send video to Claude and ask for full transcription."""
-    b64 = video_to_base64(file_bytes)
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=4096,
-        messages=[{
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": (
-                        "This is a villa walkthrough video. Please provide a comprehensive, "
-                        "verbatim-style transcript of everything spoken in the video. "
-                        "Also describe key visual elements you observe: amenities, facilities, "
-                        "property features, location clues, signage, and anything relevant to "
-                        "a real-estate acquisition. Be thorough and detailed."
-                    )
-                },
-                {
-                    "type": "document" if mime_type == "application/pdf" else "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": mime_type,
-                        "data": b64,
-                    }
-                } if mime_type.startswith("image/") else
-                # For video, use document block
-                {
-                    "type": "text",
-                    "text": f"[Video file: {filename}] Please analyze this video and describe all visible amenities, spoken content, location details, and property features as a detailed transcript."
-                }
-            ]
-        }]
+# ── Transcribe with Whisper ───────────────────────────────────────────────────
+def transcribe_audio(client: openai.OpenAI, file_bytes: bytes, filename: str) -> str:
+    buf = io.BytesIO(file_bytes)
+    buf.name = filename
+    resp = client.audio.transcriptions.create(
+        model="whisper-1",
+        file=buf,
+        response_format="text",
+        language="en",
     )
-    return response.content[0].text
+    return resp
 
-# ── Helper: extract structured data ──────────────────────────────────────────
-def extract_villa_data(transcript: str) -> dict:
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
+
+# ── Extract with GPT-4o ───────────────────────────────────────────────────────
+def extract_villa_data(client: openai.OpenAI, transcript: str) -> dict:
+    resp = client.chat.completions.create(
+        model="gpt-4o",
+        temperature=0.1,
         max_tokens=2000,
-        messages=[{
-            "role": "user",
-            "content": EXTRACTION_PROMPT + transcript
-        }]
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": f"TRANSCRIPT:\n\n{transcript}"},
+        ],
     )
-    raw = response.content[0].text.strip()
-    # Strip markdown fences if present
+    raw = resp.choices[0].message.content.strip()
     if raw.startswith("```"):
-        raw = raw.split("```")[1]
+        parts = raw.split("```")
+        raw = parts[1] if len(parts) > 1 else raw
         if raw.startswith("json"):
             raw = raw[4:]
-    return json.loads(raw)
+    return json.loads(raw.strip())
 
-# ── Helper: flatten dict for CSV ──────────────────────────────────────────────
-def flatten_for_csv(data: dict, filename: str) -> dict:
-    row = {"source_file": filename, "processed_at": datetime.now().strftime("%Y-%m-%d %H:%M")}
-    row["villa_name"] = data.get("villa_name", "")
+
+# ── Flatten to CSV row ────────────────────────────────────────────────────────
+def flatten_to_csv_row(data: dict, filename: str) -> dict:
+    row = {
+        "source_file": filename,
+        "processed_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "villa_name": data.get("villa_name", ""),
+    }
     loc = data.get("location", {})
-    row["city"] = loc.get("city", "")
-    row["state"] = loc.get("state", "")
-    row["locality"] = loc.get("locality", "")
-    row["full_address"] = loc.get("full_address", "")
-    row["nearby_landmarks"] = loc.get("nearby_landmarks", "")
+    row.update({k: loc.get(k, "") for k in ["city","state","locality","full_address","nearby_landmarks","distance_from_city"]})
+
     prop = data.get("property_details", {})
-    row["bedrooms"] = prop.get("bedrooms", "")
-    row["bathrooms"] = prop.get("bathrooms", "")
-    row["total_area_sqft"] = prop.get("total_area_sqft", "")
-    row["plot_area_sqft"] = prop.get("plot_area_sqft", "")
-    row["floors"] = prop.get("floors", "")
-    row["property_type"] = prop.get("property_type", "")
+    row.update({k: prop.get(k, "") for k in ["bedrooms","bathrooms","total_area_sqft","plot_area_sqft","floors","year_built","property_type"]})
+
     am = data.get("amenities", {})
     for key in [
-        "swimming_pool","pool_type","jacuzzi","lawn_garden","lawn_size",
-        "servant_quarters","servant_quarters_count","parking","parking_capacity",
-        "generator_backup","cctv_security","home_theatre","gym_fitness",
-        "terrace_rooftop","bar_lounge","bonfire_area","pet_friendly",
-        "chef_cook_available","ac_rooms","ac_rooms_count","modular_kitchen",
-        "outdoor_seating","mountain_view","sea_view","forest_view"
+        "swimming_pool","pool_type","pool_heated","jacuzzi",
+        "lawn_garden","lawn_size_sqft","servant_quarters","servant_quarters_count",
+        "parking","parking_capacity","generator_backup","cctv_security",
+        "home_theatre","gym_fitness","terrace_rooftop","bar_lounge",
+        "bonfire_area","pet_friendly","chef_cook_available","ac_rooms","ac_rooms_count",
+        "modular_kitchen","outdoor_seating","mountain_view","sea_view","forest_view",
     ]:
         row[key] = am.get(key, "")
-    row["other_amenities"] = ", ".join(am.get("other_amenities", []))
+    row["other_amenities"] = " | ".join(am.get("other_amenities", []))
+
     acq = data.get("acquisition", {})
-    row["asking_price"] = acq.get("asking_price", "")
-    row["asking_price_currency"] = acq.get("asking_price_currency", "INR")
-    row["price_negotiable"] = acq.get("price_negotiable", "")
-    row["ownership_type"] = acq.get("ownership_type", "")
-    row["caretaker_present"] = acq.get("caretaker_present", "")
-    row["currently_operational"] = acq.get("currently_operational", "")
-    row["existing_bookings"] = acq.get("existing_bookings", "")
-    row["revenue_mentioned"] = acq.get("revenue_mentioned", "")
-    row["legal_issues_mentioned"] = acq.get("legal_issues_mentioned", "")
-    row["renovation_needed"] = acq.get("renovation_needed", "")
-    row["contact_person"] = acq.get("contact_person", "")
-    row["contact_number"] = acq.get("contact_number", "")
-    row["stayvista_fit_score"] = data.get("stayvista_fit_score", "")
-    row["stayvista_fit_rationale"] = data.get("stayvista_fit_rationale", "")
-    row["key_highlights"] = " | ".join(data.get("key_highlights", []))
-    row["concerns"] = " | ".join(data.get("concerns", []))
-    row["summary"] = data.get("summary", "")
+    row.update({k: acq.get(k, "") for k in [
+        "asking_price_inr","price_per_sqft_inr","price_negotiable","ownership_type",
+        "caretaker_present","currently_operational","existing_bookings","annual_revenue_inr",
+        "legal_issues_mentioned","renovation_needed","renovation_estimate_inr",
+        "contact_person","contact_number",
+    ]})
+
+    row.update({
+        "stayvista_fit_score": data.get("stayvista_fit_score", ""),
+        "acquisition_recommendation": data.get("acquisition_recommendation", ""),
+        "stayvista_fit_rationale": data.get("stayvista_fit_rationale", ""),
+        "key_highlights": " | ".join(data.get("key_highlights", [])),
+        "concerns": " | ".join(data.get("concerns", [])),
+        "summary": data.get("summary", ""),
+    })
     return row
 
-# ── Helper: generate CSV bytes ─────────────────────────────────────────────────
-def generate_csv(rows: list) -> bytes:
+
+def build_csv(rows: list) -> bytes:
     if not rows:
         return b""
-    output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=rows[0].keys())
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=rows[0].keys())
     writer.writeheader()
     writer.writerows(rows)
-    return output.getvalue().encode("utf-8")
+    return buf.getvalue().encode("utf-8")
 
-# ── Score color helper ─────────────────────────────────────────────────────────
-def score_class(score):
-    if score >= 70: return "score-high"
-    if score >= 40: return "score-mid"
-    return "score-low"
 
-# ── Main upload section ────────────────────────────────────────────────────────
-col_upload, col_info = st.columns([2, 1])
+def score_color(s):
+    if s >= 70: return "green"
+    if s >= 40: return "gold"
+    return "red"
 
-with col_upload:
+
+def rec_emoji(rec: str) -> str:
+    for k, v in {"strong buy": "🟢", "buy": "🟡", "hold": "🟠", "pass": "🔴"}.items():
+        if k in rec.lower():
+            return v
+    return "⬜"
+
+
+# ── Upload section ────────────────────────────────────────────────────────────
+col_up, col_tip = st.columns([3, 2])
+
+with col_up:
     uploaded_files = st.file_uploader(
-        "Upload villa walkthrough videos",
-        type=["mp4", "mov", "avi", "mkv", "webm", "m4v"],
+        "Upload villa audio recordings",
+        type=["mp3", "wav", "m4a", "ogg", "flac", "webm", "mp4"],
         accept_multiple_files=True,
-        help="Upload one or more villa tour videos. Supported: MP4, MOV, AVI, MKV, WebM"
+        help="Upload walkthrough audio. MP3, WAV, M4A, OGG, FLAC supported.",
     )
 
-with col_info:
+with col_tip:
     st.markdown("""
-    <div class="result-card" style="height:100%">
-        <h3>Quick Start</h3>
-        <p style="color:#888; font-size:0.85rem; line-height:1.7">
-            Upload villa walkthrough videos from property visits or owner recordings. 
-            The AI will extract location, amenities, pricing, and generate an acquisition score 
-            tailored to StayVista's premium villa standards.
+    <div class="card">
+        <div class="card-title">Recording Tips</div>
+        <p style="color:#777; font-size:0.83rem; line-height:1.75; margin:0">
+            Record villa walkthroughs on your phone and export as <strong style="color:#ccc">MP3 or M4A</strong>.
+            The owner / agent narration is captured by Whisper, then GPT-4o extracts
+            every data point StayVista needs — no manual entry required.
         </p>
     </div>
     """, unsafe_allow_html=True)
 
-# ── Process button ────────────────────────────────────────────────────────────
+# ── Process ───────────────────────────────────────────────────────────────────
 if uploaded_files:
-    st.markdown(f"**{len(uploaded_files)} video(s) ready** — {', '.join(f.name for f in uploaded_files)}")
-    
-    if st.button(f"🔍  Analyze {len(uploaded_files)} Villa(s)"):
-        all_rows = []
-        all_results = []
+    n = len(uploaded_files)
+    st.markdown(f"<p style='color:var(--muted); font-size:0.82rem'>📎 {n} file(s) queued — {', '.join(f.name for f in uploaded_files)}</p>", unsafe_allow_html=True)
 
-        progress_bar = st.progress(0)
-        status_text = st.empty()
+    if not api_key:
+        st.warning("⚠️  Enter your OpenAI API key in the sidebar to proceed.")
+    else:
+        if st.button(f"🔍  Analyse {n} Villa Recording{'s' if n > 1 else ''}"):
+            oai = openai.OpenAI(api_key=api_key)
+            all_results, all_rows = [], []
+            progress = st.progress(0)
+            status = st.empty()
 
-        for idx, uploaded_file in enumerate(uploaded_files):
-            file_bytes = uploaded_file.read()
-            filename = uploaded_file.name
+            for idx, uf in enumerate(uploaded_files):
+                fname = uf.name
+                fbytes = uf.read()
 
-            status_text.markdown(f'<p class="status-analyzing">⟳ Processing {filename} ({idx+1}/{len(uploaded_files)})</p>', unsafe_allow_html=True)
-            progress_bar.progress((idx) / len(uploaded_files))
-
-            try:
-                # Step 1: Transcribe
-                status_text.markdown(f'<p class="status-analyzing">⟳ Transcribing audio & visuals — {filename}</p>', unsafe_allow_html=True)
-                
-                # For video files, we use Claude's multimodal but since direct video 
-                # transcription needs a different approach, we'll use the text-based method
-                # with detailed prompting about the video content
-                
-                # Attempt to send as base64 video document
-                b64_data = video_to_base64(file_bytes)
-                mime = "video/mp4"
-                if filename.lower().endswith(".mov"): mime = "video/quicktime"
-                elif filename.lower().endswith(".webm"): mime = "video/webm"
-                elif filename.lower().endswith(".avi"): mime = "video/avi"
-                
-                # Use Claude to analyze the video (as document)
+                status.markdown(f'<p class="status status-active">⟳ [{idx+1}/{n}] Transcribing {fname} via Whisper…</p>', unsafe_allow_html=True)
                 try:
-                    trans_response = client.messages.create(
-                        model="claude-sonnet-4-20250514",
-                        max_tokens=4096,
-                        messages=[{
-                            "role": "user",
-                            "content": [
-                                {
-                                    "type": "text",
-                                    "text": (
-                                        "This is a villa property walkthrough video for StayVista acquisition review. "
-                                        "Please provide a comprehensive transcript and visual description of this video including: "
-                                        "1) All spoken dialogue verbatim, "
-                                        "2) All visible amenities and facilities (pool, jacuzzi, lawn, servant quarters, parking, etc.), "
-                                        "3) Location details and landmarks mentioned or visible, "
-                                        "4) Property specifications (bedrooms, bathrooms, area), "
-                                        "5) Pricing or acquisition details mentioned, "
-                                        "6) Overall property condition and highlights. "
-                                        "Be extremely detailed and thorough."
-                                    )
-                                },
-                                {
-                                    "type": "document",
-                                    "source": {
-                                        "type": "base64",
-                                        "media_type": "application/pdf",
-                                        "data": b64_data
-                                    }
-                                }
-                            ]
-                        }]
-                    )
-                    transcript = trans_response.content[0].text
-                except Exception:
-                    # Fallback: use filename and ask Claude to generate based on context
-                    transcript = (
-                        f"Video file: {filename}. "
-                        "This appears to be a villa property walkthrough video submitted for StayVista acquisition analysis. "
-                        "The video likely contains: property tour of a premium villa, "
-                        "featuring various amenities and facilities. Please extract what details are available."
-                    )
+                    transcript = transcribe_audio(oai, fbytes, fname)
+                except Exception as e:
+                    st.error(f"Transcription failed — {fname}: {e}")
+                    progress.progress((idx + 1) / n)
+                    continue
 
-                # Step 2: Extract structured data
-                status_text.markdown(f'<p class="status-analyzing">⟳ Extracting villa intelligence — {filename}</p>', unsafe_allow_html=True)
-                villa_data = extract_villa_data(transcript)
-                villa_data["_transcript"] = transcript
-                villa_data["_filename"] = filename
+                status.markdown(f'<p class="status status-active">⟳ [{idx+1}/{n}] Extracting villa data via GPT-4o…</p>', unsafe_allow_html=True)
+                try:
+                    villa = extract_villa_data(oai, transcript)
+                except Exception as e:
+                    st.error(f"Extraction failed — {fname}: {e}")
+                    progress.progress((idx + 1) / n)
+                    continue
 
-                all_results.append(villa_data)
-                all_rows.append(flatten_for_csv(villa_data, filename))
+                villa["_transcript"] = transcript
+                villa["_filename"] = fname
+                all_results.append(villa)
+                all_rows.append(flatten_to_csv_row(villa, fname))
+                progress.progress((idx + 1) / n)
 
-            except Exception as e:
-                st.error(f"Error processing {filename}: {str(e)}")
-                continue
+            status.markdown('<p class="status status-done">✓ All villas analysed successfully</p>', unsafe_allow_html=True)
+            st.session_state["results"] = all_results
+            st.session_state["csv_bytes"] = build_csv(all_rows)
+            st.session_state["csv_rows"] = all_rows
+            st.rerun()
 
-            progress_bar.progress((idx + 1) / len(uploaded_files))
-
-        status_text.markdown('<p class="status-analyzing">✓ Analysis complete</p>', unsafe_allow_html=True)
-        progress_bar.progress(1.0)
-
-        # Store in session state
-        st.session_state["results"] = all_results
-        st.session_state["csv_rows"] = all_rows
-        st.session_state["csv_bytes"] = generate_csv(all_rows)
-        st.rerun()
-
-# ── Display results ───────────────────────────────────────────────────────────
-if "results" in st.session_state and st.session_state["results"]:
+# ── Results ───────────────────────────────────────────────────────────────────
+if st.session_state.get("results"):
     results = st.session_state["results"]
     csv_bytes = st.session_state["csv_bytes"]
 
     st.markdown("---")
-    st.markdown("## Analysis Results")
+    st.markdown("## Acquisition Results")
 
-    # Summary metrics
     scores = [r.get("stayvista_fit_score", 0) for r in results]
-    avg_score = sum(scores) / len(scores) if scores else 0
-    high_fit = sum(1 for s in scores if s >= 70)
+    avg = sum(scores) / len(scores) if scores else 0
+    high = sum(1 for s in scores if s >= 70)
+    buys = sum(1 for r in results if "buy" in r.get("acquisition_recommendation","").lower())
 
     st.markdown(f"""
-    <div class="metric-row">
-        <div class="metric-box"><div class="val">{len(results)}</div><div class="lbl">Villas Analyzed</div></div>
-        <div class="metric-box"><div class="val {score_class(avg_score)}">{avg_score:.0f}</div><div class="lbl">Avg Fit Score</div></div>
-        <div class="metric-box"><div class="val score-high">{high_fit}</div><div class="lbl">High Fit (≥70)</div></div>
+    <div class="metric-strip">
+        <div class="metric-tile"><div class="metric-val gold">{len(results)}</div><div class="metric-lbl">Villas Analysed</div></div>
+        <div class="metric-tile"><div class="metric-val {score_color(avg)}">{avg:.0f}</div><div class="metric-lbl">Avg Fit Score</div></div>
+        <div class="metric-tile"><div class="metric-val green">{high}</div><div class="metric-lbl">High Fit ≥70</div></div>
+        <div class="metric-tile"><div class="metric-val gold">{buys}</div><div class="metric-lbl">Buy / Strong Buy</div></div>
     </div>
     """, unsafe_allow_html=True)
 
-    # Download CSV
-    col_dl, col_sp = st.columns([1, 3])
+    col_dl, _ = st.columns([1, 3])
     with col_dl:
         st.download_button(
-            label="⬇  Download CSV Report",
+            "⬇  Download CSV Report",
             data=csv_bytes,
-            file_name=f"stayvista_villas_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+            file_name=f"stayvista_acquisition_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
             mime="text/csv",
         )
 
     st.markdown("---")
 
-    # Per-villa cards
+    PILL_MAP = {
+        "swimming_pool": "🏊 Pool", "pool_heated": "🔥 Heated Pool",
+        "jacuzzi": "♨️ Jacuzzi", "lawn_garden": "🌿 Lawn/Garden",
+        "servant_quarters": "🏠 Servant Qtrs", "parking": "🚗 Parking",
+        "generator_backup": "⚡ Generator", "cctv_security": "📹 CCTV",
+        "home_theatre": "🎬 Home Theatre", "gym_fitness": "💪 Gym",
+        "terrace_rooftop": "🌇 Terrace", "bar_lounge": "🍹 Bar/Lounge",
+        "bonfire_area": "🔥 Bonfire", "pet_friendly": "🐾 Pet Friendly",
+        "chef_cook_available": "👨‍🍳 Chef", "ac_rooms": "❄️ AC Rooms",
+        "modular_kitchen": "🍳 Mod Kitchen", "outdoor_seating": "🪑 Outdoor Seating",
+        "mountain_view": "⛰️ Mountain View", "sea_view": "🌊 Sea View",
+        "forest_view": "🌲 Forest View",
+    }
+
     for villa in results:
         score = villa.get("stayvista_fit_score", 0)
         name = villa.get("villa_name", "Unknown Villa")
         loc = villa.get("location", {})
-        location_str = ", ".join(filter(None, [loc.get("city"), loc.get("state")]))
+        loc_str = ", ".join(filter(None, [loc.get("city"), loc.get("state")]))
         am = villa.get("amenities", {})
         prop = villa.get("property_details", {})
         acq = villa.get("acquisition", {})
+        rec = villa.get("acquisition_recommendation", "")
 
-        with st.expander(f"🏛️  {name}   —   {location_str or 'Location TBD'}   |   Score: {score}/100", expanded=True):
-            col1, col2 = st.columns([3, 2])
+        with st.expander(
+            f"{rec_emoji(rec)}  {name}   ·   {loc_str or 'Location TBD'}   ·   Score {score}/100   ·   {rec}",
+            expanded=True,
+        ):
+            left, right = st.columns([3, 2])
 
-            with col1:
+            with left:
+                address = loc.get("full_address") or loc_str or "Address not captured"
+                landmarks = ("🗺️ " + loc.get("nearby_landmarks")) if loc.get("nearby_landmarks") else ""
+                dist = ("&nbsp;&nbsp;·&nbsp;&nbsp;" + loc.get("distance_from_city")) if loc.get("distance_from_city") else ""
                 st.markdown(f"""
-                <div class="result-card">
-                    <h3>{name}</h3>
-                    <p style="color:#888; font-size:0.85rem; margin-bottom:1rem">
-                        📍 {loc.get('full_address') or location_str or 'Address not mentioned'}<br>
-                        {('🏘️ Near: ' + loc.get('nearby_landmarks')) if loc.get('nearby_landmarks') else ''}
+                <div class="card">
+                    <div class="card-title">{name}</div>
+                    <p style="color:var(--muted); font-size:0.82rem; margin-bottom:0.8rem">
+                        📍 {address}<br>{landmarks}{dist}
                     </p>
-                    <p style="color:#ccc; font-size:0.9rem; line-height:1.7">{villa.get('summary', '')}</p>
+                    <p style="color:#ccc; font-size:0.85rem; line-height:1.75">{villa.get('summary','—')}</p>
                 </div>
                 """, unsafe_allow_html=True)
 
                 # Amenity pills
-                st.markdown("**Amenities**")
-                amenity_map = {
-                    "swimming_pool": "🏊 Pool", "jacuzzi": "♨️ Jacuzzi",
-                    "lawn_garden": "🌿 Lawn", "servant_quarters": "🏠 Servant Quarters",
-                    "parking": "🚗 Parking", "generator_backup": "⚡ Generator",
-                    "cctv_security": "📹 CCTV", "home_theatre": "🎬 Home Theatre",
-                    "gym_fitness": "💪 Gym", "terrace_rooftop": "🌇 Terrace",
-                    "bar_lounge": "🍹 Bar/Lounge", "bonfire_area": "🔥 Bonfire",
-                    "pet_friendly": "🐾 Pet Friendly", "chef_cook_available": "👨‍🍳 Chef",
-                    "ac_rooms": "❄️ AC Rooms", "modular_kitchen": "🍳 Mod Kitchen",
-                    "outdoor_seating": "🪑 Outdoor Seating", "mountain_view": "⛰️ Mountain View",
-                    "sea_view": "🌊 Sea View", "forest_view": "🌲 Forest View",
-                }
-                pill_html = ""
-                for key, label in amenity_map.items():
+                st.markdown("**Amenities Detected**")
+                pill_html = '<div class="pills">'
+                found = False
+                for key, label in PILL_MAP.items():
                     if am.get(key):
                         pill_html += f'<span class="pill">{label}</span>'
-                if am.get("other_amenities"):
-                    for oa in am["other_amenities"]:
-                        pill_html += f'<span class="pill">{oa}</span>'
-                st.markdown(pill_html or '<span style="color:#888">No amenities detected</span>', unsafe_allow_html=True)
+                        found = True
+                for oa in am.get("other_amenities", []):
+                    pill_html += f'<span class="pill">{oa}</span>'
+                    found = True
+                if not found:
+                    pill_html += '<span class="pill pill-miss">No amenities captured</span>'
+                pill_html += "</div>"
+                st.markdown(pill_html, unsafe_allow_html=True)
 
-                # Highlights & Concerns
                 if villa.get("key_highlights"):
                     st.markdown("**Key Highlights**")
                     for h in villa["key_highlights"]:
-                        st.markdown(f"✦ {h}")
+                        st.markdown(f"<span style='color:var(--green)'>✦</span> <span style='font-size:0.83rem'>{h}</span>", unsafe_allow_html=True)
 
                 if villa.get("concerns"):
                     st.markdown("**Concerns**")
                     for c in villa["concerns"]:
-                        st.markdown(f"⚠ {c}")
+                        st.markdown(f"<span style='color:var(--red)'>⚠</span> <span style='font-size:0.83rem; color:#bbb'>{c}</span>", unsafe_allow_html=True)
 
-            with col2:
-                # Score
-                sc_cls = score_class(score)
+            with right:
+                sc = score_color(score)
                 st.markdown(f"""
-                <div class="result-card" style="text-align:center">
-                    <div class="lbl" style="font-size:0.7rem; letter-spacing:0.12em; text-transform:uppercase; color:#888; margin-bottom:0.5rem">Fit Score</div>
-                    <div class="val {sc_cls}" style="font-family:'Cormorant Garamond',serif; font-size:3.5rem; font-weight:300">{score}</div>
-                    <div style="font-size:0.7rem; color:#888">/100</div>
-                    <p style="color:#999; font-size:0.8rem; margin-top:0.75rem">{villa.get('stayvista_fit_rationale','')}</p>
+                <div class="card score-wrap">
+                    <div class="score-label">StayVista Fit Score</div>
+                    <div class="score-num {sc}">{score}<span class="score-denom">/100</span></div>
+                    <div style="font-size:0.75rem; color:var(--muted); letter-spacing:0.1em; margin-top:0.3rem">{rec}</div>
+                    <div class="score-rationale">{villa.get('stayvista_fit_rationale','')}</div>
                 </div>
                 """, unsafe_allow_html=True)
 
-                # Property specs
-                specs = {
-                    "Bedrooms": prop.get("bedrooms"),
-                    "Bathrooms": prop.get("bathrooms"),
-                    "Total Area": f"{prop.get('total_area_sqft')} sqft" if prop.get("total_area_sqft") else None,
-                    "Plot Area": f"{prop.get('plot_area_sqft')} sqft" if prop.get("plot_area_sqft") else None,
-                    "Property Type": prop.get("property_type"),
-                    "Floors": prop.get("floors"),
-                }
                 st.markdown("**Property Details**")
-                for k, v in specs.items():
+                spec_html = ""
+                for k, v in [
+                    ("Type", prop.get("property_type")),
+                    ("Bedrooms", prop.get("bedrooms")),
+                    ("Bathrooms", prop.get("bathrooms")),
+                    ("Total Area", f"{prop.get('total_area_sqft'):,} sqft" if prop.get("total_area_sqft") else None),
+                    ("Plot Area", f"{prop.get('plot_area_sqft'):,} sqft" if prop.get("plot_area_sqft") else None),
+                    ("Floors", prop.get("floors")),
+                    ("Year Built", prop.get("year_built")),
+                ]:
                     if v:
-                        st.markdown(f"<span style='color:#888; font-size:0.85rem'>{k}:</span> <span style='font-size:0.85rem'>{v}</span>", unsafe_allow_html=True)
+                        spec_html += f'<div class="spec-row"><span class="spec-key">{k}</span><span class="spec-val">{v}</span></div>'
+                st.markdown(spec_html or "<p style='color:var(--muted); font-size:0.82rem'>Not captured</p>", unsafe_allow_html=True)
 
-                # Acquisition
-                st.markdown("**Acquisition**")
-                acq_fields = {
-                    "Asking Price": f"₹{acq.get('asking_price'):,}" if acq.get("asking_price") else None,
-                    "Ownership": acq.get("ownership_type"),
-                    "Negotiable": "Yes" if acq.get("price_negotiable") else ("No" if acq.get("price_negotiable") is False else None),
-                    "Operational": "Yes" if acq.get("currently_operational") else None,
-                    "Contact": acq.get("contact_person"),
-                    "Phone": acq.get("contact_number"),
-                    "Legal Issues": "⚠ Mentioned" if acq.get("legal_issues_mentioned") else None,
-                    "Renovation Needed": "Yes" if acq.get("renovation_needed") else None,
-                }
-                for k, v in acq_fields.items():
+                st.markdown("**Acquisition Details**")
+                price = acq.get("asking_price_inr")
+                acq_html = ""
+                for k, v in [
+                    ("Asking Price", f"₹{price:,.0f}" if price else None),
+                    ("₹/sqft", f"₹{acq.get('price_per_sqft_inr'):,.0f}" if acq.get("price_per_sqft_inr") else None),
+                    ("Negotiable", "Yes" if acq.get("price_negotiable") is True else ("No" if acq.get("price_negotiable") is False else None)),
+                    ("Ownership", acq.get("ownership_type")),
+                    ("Annual Revenue", f"₹{acq.get('annual_revenue_inr'):,.0f}" if acq.get("annual_revenue_inr") else None),
+                    ("Caretaker", "Yes" if acq.get("caretaker_present") else None),
+                    ("Operational", "Yes" if acq.get("currently_operational") else None),
+                    ("Legal Issues", "⚠ Mentioned" if acq.get("legal_issues_mentioned") else None),
+                    ("Renovation", "Needed" if acq.get("renovation_needed") else None),
+                    ("Reno Estimate", f"₹{acq.get('renovation_estimate_inr'):,.0f}" if acq.get("renovation_estimate_inr") else None),
+                    ("Contact", acq.get("contact_person")),
+                    ("Phone", acq.get("contact_number")),
+                ]:
                     if v:
-                        st.markdown(f"<span style='color:#888; font-size:0.85rem'>{k}:</span> <span style='font-size:0.85rem'>{v}</span>", unsafe_allow_html=True)
+                        acq_html += f'<div class="spec-row"><span class="spec-key">{k}</span><span class="spec-val">{v}</span></div>'
+                st.markdown(acq_html or "<p style='color:var(--muted); font-size:0.82rem'>Not captured</p>", unsafe_allow_html=True)
+                st.markdown(f"<p style='color:#333; font-size:0.72rem; margin-top:0.5rem'>Source: {villa.get('_filename','')}</p>", unsafe_allow_html=True)
 
-                # Source file
-                st.markdown(f"<span style='color:#555; font-size:0.75rem'>Source: {villa.get('_filename','')}</span>", unsafe_allow_html=True)
+            with st.expander("📝 Raw Whisper Transcript"):
+                st.markdown(f'<div class="transcript-box">{villa.get("_transcript","No transcript available.")}</div>', unsafe_allow_html=True)
 
-            # Transcript
-            with st.expander("📝 View Raw Transcript"):
-                st.markdown(f'<div class="transcript-box">{villa.get("_transcript","")}</div>', unsafe_allow_html=True)
-
-    # Bottom CSV download
     st.markdown("---")
     col_a, col_b, col_c = st.columns([1, 2, 1])
     with col_b:
         st.download_button(
-            label="⬇  Download Full Acquisition Report (CSV)",
+            "⬇  Download Full Acquisition Report (CSV)",
             data=csv_bytes,
-            file_name=f"stayvista_acquisition_report_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+            file_name=f"stayvista_acquisition_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
             mime="text/csv",
         )
-        st.caption(f"{len(results)} villa(s) · {len(st.session_state['csv_rows'][0]) if st.session_state['csv_rows'] else 0} data fields per villa")
+        fc = len(st.session_state["csv_rows"][0]) if st.session_state.get("csv_rows") else 0
+        st.caption(f"{len(results)} villa(s) · {fc} data fields per entry")
 
 else:
-    # Empty state
     st.markdown("""
-    <div style="text-align:center; padding: 4rem 2rem; color: #444;">
-        <div style="font-size: 3rem; margin-bottom: 1rem;">🏛️</div>
-        <p style="font-family: 'Cormorant Garamond', serif; font-size: 1.5rem; color: #666;">Upload villa videos to begin acquisition analysis</p>
-        <p style="font-size: 0.85rem; color: #444; max-width: 400px; margin: 0 auto; line-height: 1.7">
-            Supports MP4, MOV, AVI, MKV and WebM formats. 
-            Multiple videos can be processed in a single batch.
-        </p>
+    <div class="empty-state">
+        <div class="icon">🏛️</div>
+        <p>Upload villa audio recordings to begin</p>
+        <small>
+            Supports MP3 · WAV · M4A · OGG · FLAC<br>
+            Multiple files processed in one batch
+        </small>
     </div>
     """, unsafe_allow_html=True)
