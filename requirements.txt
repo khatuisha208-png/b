@@ -1,11 +1,3 @@
-openai
-whisper
-json
-csv
-ffmpeg-python
-langdetect
-torch
-numpy
-io
-os
-
+streamlit==1.33.0
+openai==1.30.0
+client = openai.OpenAI(api_key=api_key)
