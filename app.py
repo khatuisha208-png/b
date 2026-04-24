@@ -1,5 +1,5 @@
 import streamlit as st
-import whisper
+
 import json
 import csv
 import io
@@ -37,10 +37,7 @@ with st.sidebar:
     st.markdown("**Supported languages**")
     st.markdown("Hindi, English, Hinglish — auto-detected")
 
-# ── Whisper loader ─────────────────────────────────────────────────────────────
-@st.cache_resource
-def load_whisper():
-    return whisper.load_model("base")
+
 
 # ── System prompt ──────────────────────────────────────────────────────────────
 SYSTEM_PROMPT = """You are a real estate data extraction assistant for StayVista,
@@ -160,21 +157,40 @@ if uploaded_file:
             tmp_path = tmp.name
 
         try:
-            # ── Step 1: Transcribe ─────────────────────────────────────────────
-            with st.status("🎙️ Transcribing audio...", expanded=True) as status:
-                st.write("Loading Whisper model...")
-                model = load_whisper()
-                st.write("Transcribing and translating to English...")
-                result = model.transcribe(tmp_path, task="translate", language=None)
-                transcription = result["text"]
-                detected_lang = result.get("language", "unknown")
-                status.update(
-                    label=f"✅ Transcription done  (detected: {detected_lang})",
-                    state="complete"
-                )
+# ── Step 1: Transcribe via Groq Whisper API ───────────────────────────────
+          with st.status("🎙️ Transcribing audio...", expanded=True) as status:
+             st.write("Sending to Groq Whisper API...")
+             client = Groq(api_key=groq_api_key)
 
-            with st.expander("📄 View raw transcription"):
-                st.write(transcription)
+           with open(tmp_path, "rb") as audio_file:
+            transcription_response = client.audio.transcriptions.create(
+            file=(uploaded_file.name, audio_file.read()),
+            model="whisper-large-v3",
+            response_format="text",
+            language="hi",        # set to "hi" for Hindi, or remove for auto-detect
+            )
+
+    transcription = transcription_response
+    status.update(label="✅ Transcription done", state="complete")
+    # ── Step 1b: Translate to English if needed ───────────────────────────────
+           with st.status("🌐 Translating to English...", expanded=True) as status:
+              st.write("Detecting language and translating...")
+            translation_response = client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=[
+                        {"role": "system", "content": 
+                        "You are a translator. If the text is in Hindi or Hinglish, "
+                        "translate it to English. If it is already in English, return it as-is. "
+                        "Return ONLY the translated text, nothing else."},
+                        {"role": "user", "content": transcription}
+                   ],
+                   temperature=0.1
+                   )
+            transcription = translation_response.choices[0].message.content
+            status.update(label="✅ Translation done", state="complete")
+
+            with st.expander("📄 View transcription"):
+              st.write(transcription)
 
             # ── Step 2: AI Analysis ────────────────────────────────────────────
             with st.status("🤖 Analysing with Llama 3...", expanded=True) as status:
